@@ -1,0 +1,9 @@
+numpy
+torch>=1.7
+opencv_python
+loguru
+tqdm
+torchvision
+thop
+pycocotools>=2.0.2
+tabulate
