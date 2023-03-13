@@ -11,8 +11,8 @@ from yolox.utils import postprocess
 from tool import get_prediction, bbox_iou
 
 class DCLOSE(object):
-    def __init__(self, arch, model, img_size=(640, 640), n_segments=150, n_levels=5, n_samples=4000, resize_offset = 2.2, batch_size=32, prob=0.5, kernel_width = 0.25, seed=0, device='cuda', **kwargs):
-        '''
+    def __init__(self, arch, model, img_size=(640, 640), n_segments=150, n_levels=5, n_samples=4000, resize_offset = 2.2, batch_size=32, prob=0.5, seed=0, device='cuda', **kwargs):
+        """
         arch: type(str) - Model's name
         model: type(nn.Module)
         img_size: type(tuple) - Input image size
@@ -22,9 +22,8 @@ class DCLOSE(object):
         resize_offset: type(float) - Mask resize ratio (default=2.2)
         batch_size: type(int) -  Number of masks in a batch (default=32)
         prob: (0-1) - Probability of 0 and 1 in mask generating (default=0.5)
-        kernel_width: (0-1) - Control parameter (default=0.25)
         device: type(str) - Whether use cuda or cpu.
-        '''
+        """
         self.arch = arch
         self.model = model.eval()
         self.img_size = img_size
@@ -37,7 +36,6 @@ class DCLOSE(object):
         self.r = resize_offset
         self.p = prob
         self.batch_size = batch_size
-        self.kernel_width = kernel_width
         self.device = device
 
     def __call__(self, image, box):
@@ -91,12 +89,12 @@ class DCLOSE(object):
             mask_bs = min(self.n_samples - self.batch_size * chunk, self.batch_size)
             level_idx = chunk // level_group
             level_idx = min(level_idx, self.n_levels - 1)
-
+            np_masks = np.zeros((mask_bs, ) + (h, w), dtype=np.float32)
             data = np.random.choice([0, 1], size=n_spixels[level_idx], p=[1 - self.p, self.p])
             zeros = np.where(data == 0)[0]
             mask = np.zeros(slic_seg[level_idx].shape).astype(float)
             for z in zeros:
-              mask[slic_seg[level_idx] == z] = 1.0
+                mask[slic_seg[level_idx] == z] = 1.0
             mask = Image.fromarray(mask * 255.)
             mask = mask.resize((w_mask,h_mask),Image.BILINEAR)
             mask = np.array(mask)
@@ -104,9 +102,11 @@ class DCLOSE(object):
                 # crop mask
                 w_crop = np.random.randint(0, self.r*w + 1)
                 h_crop = np.random.randint(0, self.r*h + 1)
-                masks_np = mask[h_crop:h_crop+h, w_crop:w_crop+w]
-                masks_np /= 255.0
-                masks_ts = torch.from_numpy(masks_np).to(self.device)
+                np_masks[b] = mask[h_crop:h_crop+h, w_crop:w_crop+w]
+                if np.isnan(np.sum(np_masks[b])):
+                    np_masks[b] = np_masks[0].copy() if not np.isnan(np.sum(np_masks[0])) else np_masks[1].copy()
+                np_masks[b] /= 255.0
+                masks_ts = torch.from_numpy(np_masks[b]).to(self.device)
                 masks_ts = masks_ts.resize(1,1,h, w)
                 density_map[level_idx] += masks_ts
 
@@ -134,7 +134,7 @@ class DCLOSE(object):
                         for k in range(temp.shape[0]):
                             # similarity score for each box
                             distances = spatial.distance.cosine(all_scores[indices][k].cpu(), target_scores[idx].cpu())
-                            weights = math.sqrt(math.exp(-(distances**2)/self.kernel_width**2)) 
+                            weights = 1 - distances
                             iou = torchvision.ops.box_iou(temp[k].unsqueeze(0), target_box[idx].unsqueeze(0)).cpu().item()
                             score_obj = max(score_obj, iou * weights * p_obj[indices][k].cpu().item())             
                         max_score[idx] = score_obj
